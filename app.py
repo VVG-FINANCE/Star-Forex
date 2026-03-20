@@ -1,123 +1,53 @@
-import streamlit as st
-import pandas as pd
-import plotly.graph_objects as go
-from datetime import datetime
+# 4. Layout Principal - Reservando espaços fixos (Placeholders)
+# Isso evita que o React tente remover nós que ainda estão sendo renderizados
+metrics_container = st.container()
+chart_placeholder = st.empty()
+opp_placeholder = st.empty()
 
-# Importações dos nossos módulos internos
-from config import Config
-from data_manager import DataManager
-from engine.core import TradingEngine
-
-# 1. Configuração de Página e Estilo
-st.set_page_config(
-    page_title=Config.APP_TITLE,
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# CSS para esconder menus desnecessários e otimizar mobile
-st.markdown("""
-    <style>
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    .stMetric { background-color: #1e2130; padding: 15px; border-radius: 10px; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# 2. Inicialização de Estado (Singleton)
-if 'dm' not in st.session_state:
-    st.session_state.dm = DataManager()
-    st.session_state.engine = TradingEngine()
-    st.session_state.last_update = datetime.now()
-
-# 3. Sidebar - Status e Configurações
-with st.sidebar:
-    st.title("🛡️ Sistema Quant")
-    st.subheader("EUR/USD Real-Time")
-    
-    # Ajuste de Pip Dinâmico
-    Config.PIP_ADJUSTMENT = st.number_input(
-        "Ajuste de Pip (Offset)", 
-        value=Config.PIP_ADJUSTMENT, 
-        format="%.5f", 
-        step=0.00001
-    )
-    
-    st.divider()
-    status = st.session_state.dm.get_market_status()
-    st.write(f"**API Health:** {'✅ Estável' if status['is_healthy'] else '⚠️ Reconectando'}")
-    st.write(f"**Refresh:** {status['interval']}s")
-    st.write(f"**Última Sync:** {st.session_state.last_update.strftime('%H:%M:%S')}")
-
-# 4. Layout Principal
-col_price, col_score, col_trend = st.columns(3)
-
-# --- FRAGMENTO DE ATUALIZAÇÃO ---
-@st.fragment(run_every=Config.INITIAL_INTERVAL)
+@st.fragment(run_every=10) # Aumentado para 10s para estabilidade no Cloud
 def main_loop():
     df = st.session_state.dm.fetch_data()
     
     if df is not None:
         st.session_state.last_update = datetime.now()
-        
-        # Processamento pelo Core Engine
         opportunity, score = st.session_state.engine.process(df)
         
-        # A. Métricas de Topo
-        current_price = df['Close'].iloc[-1]
-        prev_price = df['Close'].iloc[-2]
-        delta_p = current_price - prev_price
-        
-        with col_price:
-            st.metric("Preço Atual", f"{current_price:.5f}", f"{delta_p:.5f}")
-        
-        with col_score:
-            color = "normal" if 40 < score < 60 else "inverse"
-            st.metric("Score Probabilístico", f"{score}%", f"{score-50:.1f}%", delta_color=color)
+        # A. Atualização de Métricas em Containers Fixos
+        with metrics_container:
+            col_price, col_score, col_trend = st.columns(3)
+            current_price = df['Close'].iloc[-1]
+            delta_p = current_price - df['Close'].iloc[-2]
             
-        with col_trend:
-            trend_label = "Alta Volatilidade" if df['Close'].pct_change().std() > 0.0002 else "Baixa Volatilidade"
-            st.metric("Regime de Mercado", trend_label)
+            col_price.metric("Preço Atual", f"{current_price:.5f}", f"{delta_p:.5f}")
+            col_score.metric("Score Probabilístico", f"{score}%", delta_color="normal" if 40 < score < 60 else "inverse")
+            col_trend.metric("Regime", "Trending" if score > 60 or score < 40 else "Ranging")
 
-        # B. Gráfico Interativo Plotly
-        fig = go.Figure()
-        
-        # Candlesticks
-        fig.add_trace(go.Candlestick(
-            x=df.index, open=df['Open'], high=df['High'], 
-            low=df['Low'], close=df['Close'], name="EUR/USD"
-        ))
-        
-        # Kalman Filter Line
-        fig.add_trace(go.Scatter(
-            x=df.index, y=df['Kalman_Price'], 
-            line=dict(color='#00d4ff', width=1.5), name="Filtro de Kalman"
-        ))
-        
-        fig.update_layout(
-            template="plotly_dark", 
-            height=450, 
-            margin=dict(l=0, r=0, t=0, b=0),
-            xaxis_rangeslider_visible=False
-        )
-        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+        # B. Gráfico com KEY ÚNICA (Crucial para evitar o erro de removeChild)
+        with chart_placeholder:
+            fig = go.Figure()
+            fig.add_trace(go.Candlestick(
+                x=df.index, open=df['Open'], high=df['High'], 
+                low=df['Low'], close=df['Close'], name="EUR/USD"
+            ))
+            fig.add_trace(go.Scatter(
+                x=df.index, y=df['Kalman_Price'], 
+                line=dict(color='#00d4ff', width=1.5), name="Kalman"
+            ))
+            fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=0, b=0), xaxis_rangeslider_visible=False)
+            
+            # O parâmetro 'key' garante que o React rastreie o gráfico corretamente
+            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False}, key="forex_main_chart")
 
-        # C. Painel de Oportunidades
-        if opportunity:
-            with st.container(border=True):
-                c1, c2, c3 = st.columns([1, 2, 1])
-                with c1:
-                    st.markdown(f"### DIREÇÃO\n## <span style='color:{opportunity['color']}'>{opportunity['side']}</span>", unsafe_allow_html=True)
-                with c2:
-                    st.markdown("### NÍVEIS DE ENTRADA")
-                    st.code(f"Principal: {opportunity['entry'][0]:.5f}\nSecundária: {opportunity['entry'][1]:.5f}")
-                with c3:
-                    st.markdown("### TAKE PROFIT (ALVOS)")
-                    for i, tp in enumerate(opportunity['tp'], 1):
-                        st.write(f"🎯 Alvo {i}: **{tp:.5f}**")
-                    st.error(f"Stop Loss: {opportunity['sl'][0]:.5f}")
-        else:
-            st.info("🔎 Analisando microestrutura... Aguardando convergência de modelos.")
+        # C. Painel de Oportunidades em Placeholder Fixo
+        with opp_placeholder:
+            if opportunity:
+                with st.container(border=True):
+                    c1, c2, c3 = st.columns([1, 2, 1])
+                    c1.markdown(f"### <span style='color:{opportunity['color']}'>{opportunity['side']}</span>", unsafe_allow_html=True)
+                    c2.code(f"Entrada: {opportunity['entry'][0]:.5f}\nSL: {opportunity['sl'][0]:.5f}")
+                    c3.write(f"Alvo 1: {opportunity['tp'][0]:.5f}")
+            else:
+                st.info("🔎 Monitorando fluxo institucional... Aguardando convergência.")
 
-# Execução
+# Execução do loop estável
 main_loop()
