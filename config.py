@@ -8,7 +8,7 @@ class Config:
     WINDOW_LOOKBACK = 100    # Quantidade de velas para análise estatística
     
     # --- Configurações de Conexão Adaptativa ---
-    INITIAL_INTERVAL = 10    # Começa tentando atualizar a cada 5 segundos
+    INITIAL_INTERVAL = 5    # Começa tentando atualizar a cada 5 segundos
     MAX_INTERVAL = 60        # Se houver bloqueio, sobe até 60 segundos
     
     # --- Pesos do Score Probabilístico (Soma deve ser 100) ---
